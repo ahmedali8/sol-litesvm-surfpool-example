@@ -1,20 +1,32 @@
 {
   "license": "MIT",
   "scripts": {
-    "lint:fix": "prettier */*.js \"*/**/*{.js,.ts}\" -w",
-    "lint": "prettier */*.js \"*/**/*{.js,.ts}\" --check"
+    "biome:check": "biome check .",
+    "biome:write": "biome check --write . && bun run biome:write:imports",
+    "biome:write:imports": "biome lint --write --only correctness/noUnusedImports .",
+    "prettier:write": "prettier --cache --write \"**/*.{md,yml}\"",
+    "prettier:check": "prettier --cache --check \"**/*.{md,yml}\""
   },
   "dependencies": {
-    "@coral-xyz/anchor": "^0.32.1"
+    "@coral-xyz/anchor": "^0.32.1",
+    "@solana-developers/helpers": "^2.8.1",
+    "@solana/spl-token": "^0.4.14",
+    "@solana/web3.js": "^1.98.4"
   },
   "devDependencies": {
-    "chai": "^4.3.4",
-    "mocha": "^9.0.3",
-    "ts-mocha": "^10.0.0",
+    "@biomejs/biome": "^2.2.6",
     "@types/bn.js": "^5.1.0",
     "@types/chai": "^4.3.0",
     "@types/mocha": "^9.0.0",
-    "typescript": "^5.7.3",
-    "prettier": "^2.6.2"
-  }
+    "@types/node": "^24.7.2",
+    "anchor-bankrun": "^0.5.0",
+    "chai": "^4.3.4",
+    "mocha": "^9.0.3",
+    "prettier": "^3.6.2",
+    "solana-bankrun": "^0.4.0",
+    "ts-mocha": "^10.0.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.3"
+  },
+  "type": "module"
 }
