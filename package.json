@@ -1,6 +1,8 @@
 {
   "license": "MIT",
   "scripts": {
+    "build": "anchor build && yarn build:codama-client",
+    "build:codama-client": "ts-node scripts/create-codama-client.ts",
     "biome:check": "biome check .",
     "biome:write": "biome check --write . && bun run biome:write:imports",
     "biome:write:imports": "biome lint --write --only correctness/noUnusedImports .",
@@ -12,11 +14,15 @@
   "dependencies": {
     "@coral-xyz/anchor": "^0.32.1",
     "@solana-developers/helpers": "^2.8.1",
+    "@solana/kit": "^4.0.0",
     "@solana/spl-token": "^0.4.14",
-    "@solana/web3.js": "^1.98.4"
+    "@solana/web3.js": "^1.98.4",
+    "solana-kite": "^1.7.1"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.2.6",
+    "@codama/nodes-from-anchor": "^1.2.9",
+    "@codama/renderers-js": "^1.4.3",
     "@types/bn.js": "^5.1.0",
     "@types/chai": "^4.3.0",
     "@types/mocha": "^9.0.0",
@@ -24,6 +30,7 @@
     "anchor-bankrun": "^0.5.0",
     "anchor-litesvm": "^0.2.1",
     "chai": "^4.3.4",
+    "codama": "^1.3.7",
     "litesvm": "^0.3.3",
     "mocha": "^9.0.3",
     "prettier": "^3.6.2",
