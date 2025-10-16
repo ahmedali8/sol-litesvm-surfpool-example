@@ -43,8 +43,8 @@ describe("escrow litesvm", () => {
   const tokenMintA: Keypair = Keypair.generate();
   const tokenMintB: Keypair = Keypair.generate();
 
-  const tokenAOfferedAmount = new BN(1_000_000);
-  const tokenBWantedAmount = new BN(1_000_000);
+  const tokenAOfferedAmount = new BN(1 * LAMPORTS_PER_SOL);
+  const tokenBWantedAmount = new BN(1 * LAMPORTS_PER_SOL);
 
   // fund the payer, alice, and bob
   provider.client.airdrop(payer.publicKey, BigInt(10 * LAMPORTS_PER_SOL));
@@ -91,7 +91,7 @@ describe("escrow litesvm", () => {
       // Initializes a new mint and optionally deposits all the newly minted tokens in an account.
       const initMintA = createInitializeMint2Instruction(
         tokenMintA.publicKey,
-        6,
+        9,
         alice.publicKey, // mint authority
         null,
         TOKEN_PROGRAM,
@@ -111,7 +111,7 @@ describe("escrow litesvm", () => {
         tokenMintA.publicKey,
         aliceTokenAccountA,
         alice.publicKey,
-        1_000_000_000, // 1000 tokens with 6 decimals
+        1000 * LAMPORTS_PER_SOL, // 1000 tokens with 9 decimals
         [],
         TOKEN_PROGRAM,
       );
@@ -128,7 +128,7 @@ describe("escrow litesvm", () => {
       // Initializes a new mint and optionally deposits all the newly minted tokens in an account.
       const initMintB = createInitializeMint2Instruction(
         tokenMintB.publicKey,
-        6,
+        9,
         bob.publicKey, // mint authority
         null,
         TOKEN_PROGRAM,
@@ -148,7 +148,7 @@ describe("escrow litesvm", () => {
         tokenMintB.publicKey,
         bobTokenAccountB,
         bob.publicKey,
-        1_000_000_000, // 1000 tokens with 6 decimals
+        1000 * LAMPORTS_PER_SOL, // 1000 tokens with 9 decimals
         [],
         TOKEN_PROGRAM,
       );

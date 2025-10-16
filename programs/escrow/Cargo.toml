@@ -29,3 +29,8 @@
   unexpected_cfgs = { level = "warn", check-cfg = [
     'cfg(target_os, values("solana"))',
   ] }
+
+[dev-dependencies]
+  litesvm = "0.8.1"
+  solana-keypair = "2.2.0"
+  solana-pubkey = "2.2.3"

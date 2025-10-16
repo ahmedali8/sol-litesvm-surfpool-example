@@ -11,7 +11,7 @@
   },
   "files": {
     "maxSize": 5242880,
-    "includes": ["**/*.{js,json,jsonc,jsx,ts,tsx}", "!node_modules/**/*"]
+    "includes": ["**/*.{js,json,jsonc,jsx,ts,tsx}", "!node_modules/**/*", "!dist/**/*"]
   },
   "formatter": {
     "enabled": true,
