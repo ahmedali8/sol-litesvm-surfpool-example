@@ -1,11 +1,17 @@
-import { randomBytes } from "node:crypto";
 import * as anchor from "@coral-xyz/anchor";
-import { BN, type Program } from "@coral-xyz/anchor";
-import { getAssociatedTokenAddressSync, TOKEN_2022_PROGRAM_ID, type TOKEN_PROGRAM_ID } from "@solana/spl-token";
-import { LAMPORTS_PER_SOL, PublicKey } from "@solana/web3.js";
-import { confirmTransaction, createAccountsMintsAndTokenAccounts, makeKeypairs } from "@solana-developers/helpers";
+import {
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+  getAssociatedTokenAddressSync,
+  TOKEN_2022_PROGRAM_ID,
+  type TOKEN_PROGRAM_ID,
+} from "@solana/spl-token";
+import { type Keypair, LAMPORTS_PER_SOL, PublicKey, SystemProgram } from "@solana/web3.js";
 import { assert } from "chai";
 import { type Escrow } from "../target/types/escrow";
+import { makeKeypairs } from "./utils/keypair";
+import { getRandomBigNumber } from "./utils/random-bn";
+import { createAccountsMintsAndTokenAccountsInstructions, makeAndSendAndConfirmTransaction } from "./utils/token";
+import { confirmTransaction } from "./utils/transaction";
 
 // Work on both Token Program and new Token Extensions Program
 const TOKEN_PROGRAM: typeof TOKEN_2022_PROGRAM_ID | typeof TOKEN_PROGRAM_ID = TOKEN_2022_PROGRAM_ID;
@@ -17,98 +23,95 @@ const SECONDS = 1000;
 // network IO, these tests usually take about 15 seconds.
 const ANCHOR_SLOW_TEST_THRESHOLD = 40 * SECONDS;
 
-const getRandomBigNumber = (size = 8) => {
-  return new BN(randomBytes(size));
-};
-
-describe("escrow", async () => {
-  // Use the cluster and the keypair from Anchor.toml
-  const provider = anchor.AnchorProvider.env();
-  anchor.setProvider(provider);
-
-  // See https://github.com/coral-xyz/anchor/issues/3122
-  const user = (provider.wallet as anchor.Wallet).payer;
-  const payer = user;
-
-  const connection = provider.connection;
-
-  const program = anchor.workspace.Escrow as Program<Escrow>;
-
+describe("escrow", () => {
   // We're going to reuse these accounts across multiple tests
   const accounts: Record<string, PublicKey> = {
     tokenProgram: TOKEN_PROGRAM,
   };
 
-  let alice: anchor.web3.Keypair;
-  let bob: anchor.web3.Keypair;
-  let tokenMintA: anchor.web3.Keypair;
-  let tokenMintB: anchor.web3.Keypair;
+  let provider: anchor.AnchorProvider;
+  let program: anchor.Program<Escrow>;
 
-  [alice, bob, tokenMintA, tokenMintB] = makeKeypairs(4);
+  let payer: Keypair;
+  let alice: Keypair;
+  let bob: Keypair;
+  let tokenMintA: Keypair;
+  let tokenMintB: Keypair;
 
-  const tokenAOfferedAmount = new BN(1_000_000);
-  const tokenBWantedAmount = new BN(1_000_000);
+  const tokenAOfferedAmount = new anchor.BN(1_000_000);
+  const tokenBWantedAmount = new anchor.BN(1_000_000);
 
-  before(
-    "Creates Alice and Bob accounts, 2 token mints, and associated token accounts for both tokens for both users",
-    async () => {
-      const usersMintsAndTokenAccounts = await createAccountsMintsAndTokenAccounts(
+  before(async () => {
+    provider = anchor.AnchorProvider.env();
+    anchor.setProvider(provider);
+    program = anchor.workspace.Escrow;
+
+    payer = provider.wallet.payer;
+
+    // Create Alice and Bob accounts, 2 token mints, and associated token accounts for both tokens for both users
+    const usersMintsAndTokenAccounts = await createAccountsMintsAndTokenAccountsInstructions({
+      connection: provider.connection,
+      decimals: 6,
+      lamports: 1 * LAMPORTS_PER_SOL,
+      payer,
+      usersAndTokenBalances: [
+        // Alice's token balances
         [
-          // Alice's token balances
-          [
-            // 1_000_000_000 of token A
-            1_000_000_000,
-            // 0 of token B
-            0,
-          ],
-          // Bob's token balances
-          [
-            // 0 of token A
-            0,
-            // 1_000_000_000 of token B
-            1_000_000_000,
-          ],
+          // 1_000_000_000 of token A
+          1_000_000_000,
+          // 0 of token B
+          0,
         ],
-        1 * LAMPORTS_PER_SOL,
-        connection,
-        payer,
-      );
+        // Bob's token balances
+        [
+          // 0 of token A
+          0,
+          // 1_000_000_000 of token B
+          1_000_000_000,
+        ],
+      ],
+    });
+    await makeAndSendAndConfirmTransaction({
+      connection: provider.connection,
+      instructions: usersMintsAndTokenAccounts.instructions,
+      payer,
+      signers: usersMintsAndTokenAccounts.signers,
+    });
 
-      // Alice will be the maker (creator) of the offer
-      // Bob will be the taker (acceptor) of the offer
-      const users = usersMintsAndTokenAccounts.users;
-      alice = users[0];
-      bob = users[1];
+    // Alice will be the maker (creator) of the offer
+    // Bob will be the taker (acceptor) of the offer
+    const users = usersMintsAndTokenAccounts.users;
+    alice = users[0];
+    bob = users[1];
 
-      // tokenMintA represents the token Alice is offering
-      // tokenMintB represents the token Alice wants in return
-      const mints = usersMintsAndTokenAccounts.mints;
-      tokenMintA = mints[0];
-      tokenMintB = mints[1];
+    // tokenMintA represents the token Alice is offering
+    // tokenMintB represents the token Alice wants in return
+    const mints = usersMintsAndTokenAccounts.mints;
+    tokenMintA = mints[0];
+    tokenMintB = mints[1];
 
-      const tokenAccounts = usersMintsAndTokenAccounts.tokenAccounts;
+    const tokenAccounts = usersMintsAndTokenAccounts.tokenAccounts;
 
-      // aliceTokenAccountA is Alice's account for tokenA (the token she's offering)
-      // aliceTokenAccountB is Alice's account for tokenB (the token she wants)
-      const aliceTokenAccountA = tokenAccounts[0][0];
-      const aliceTokenAccountB = tokenAccounts[0][1];
+    // aliceTokenAccountA is Alice's account for tokenA (the token she's offering)
+    // aliceTokenAccountB is Alice's account for tokenB (the token she wants)
+    const aliceTokenAccountA = tokenAccounts[0][0];
+    const aliceTokenAccountB = tokenAccounts[0][1];
 
-      // bobTokenAccountA is Bob's account for tokenA (the token Alice is offering)
-      // bobTokenAccountB is Bob's account for tokenB (the token Alice wants)
-      const bobTokenAccountA = tokenAccounts[1][0];
-      const bobTokenAccountB = tokenAccounts[1][1];
+    // bobTokenAccountA is Bob's account for tokenA (the token Alice is offering)
+    // bobTokenAccountB is Bob's account for tokenB (the token Alice wants)
+    const bobTokenAccountA = tokenAccounts[1][0];
+    const bobTokenAccountB = tokenAccounts[1][1];
 
-      // Save the accounts for later use
-      accounts.maker = alice.publicKey;
-      accounts.taker = bob.publicKey;
-      accounts.tokenMintA = tokenMintA.publicKey;
-      accounts.makerTokenAccountA = aliceTokenAccountA;
-      accounts.takerTokenAccountA = bobTokenAccountA;
-      accounts.tokenMintB = tokenMintB.publicKey;
-      accounts.makerTokenAccountB = aliceTokenAccountB;
-      accounts.takerTokenAccountB = bobTokenAccountB;
-    },
-  );
+    // Save the accounts for later use
+    accounts.maker = alice.publicKey;
+    accounts.taker = bob.publicKey;
+    accounts.tokenMintA = tokenMintA.publicKey;
+    accounts.makerTokenAccountA = aliceTokenAccountA;
+    accounts.takerTokenAccountA = bobTokenAccountA;
+    accounts.tokenMintB = tokenMintB.publicKey;
+    accounts.makerTokenAccountB = aliceTokenAccountB;
+    accounts.takerTokenAccountB = bobTokenAccountB;
+  });
 
   it("Puts the tokens Alice offers into the vault when Alice makes an offer", async () => {
     // Pick a random ID for the offer we'll make
@@ -127,15 +130,25 @@ describe("escrow", async () => {
 
     const transactionSignature = await program.methods
       .makeOffer(offerId, tokenAOfferedAmount, tokenBWantedAmount)
-      .accounts({ ...accounts })
+      .accountsStrict({
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        maker: accounts.maker,
+        makerTokenAccountA: accounts.makerTokenAccountA,
+        offer: accounts.offer,
+        systemProgram: SystemProgram.programId,
+        tokenMintA: accounts.tokenMintA,
+        tokenMintB: accounts.tokenMintB,
+        tokenProgram: TOKEN_PROGRAM,
+        vault: accounts.vault,
+      })
       .signers([alice])
       .rpc();
 
-    await confirmTransaction(connection, transactionSignature);
+    await confirmTransaction(provider.connection, transactionSignature);
 
     // Check our vault contains the tokens offered
-    const vaultBalanceResponse = await connection.getTokenAccountBalance(vault);
-    const vaultBalance = new BN(vaultBalanceResponse.value.amount);
+    const vaultBalanceResponse = await provider.connection.getTokenAccountBalance(vault);
+    const vaultBalance = new anchor.BN(vaultBalanceResponse.value.amount);
     assert(vaultBalance.eq(tokenAOfferedAmount));
 
     // Check our Offer account contains the correct data
@@ -150,22 +163,39 @@ describe("escrow", async () => {
   it("Puts the tokens from the vault into Bob's account, and gives Alice Bob's tokens, when Bob takes an offer", async () => {
     const transactionSignature = await program.methods
       .takeOffer()
-      .accounts({ ...accounts })
+      .accountsStrict({
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        maker: accounts.maker,
+        makerTokenAccountB: accounts.makerTokenAccountB,
+        offer: accounts.offer,
+        systemProgram: SystemProgram.programId,
+        taker: accounts.taker,
+        takerTokenAccountA: accounts.takerTokenAccountA,
+        takerTokenAccountB: accounts.takerTokenAccountB,
+        tokenMintA: accounts.tokenMintA,
+        tokenMintB: accounts.tokenMintB,
+        tokenProgram: TOKEN_PROGRAM,
+        vault: accounts.vault,
+      })
       .signers([bob])
       .rpc();
 
-    await confirmTransaction(connection, transactionSignature);
+    await confirmTransaction(provider.connection, transactionSignature);
 
     // Check the offered tokens are now in Bob's account
     // (note: there is no before balance as Bob didn't have any offered tokens before the transaction)
-    const bobTokenAccountBalanceAfterResponse = await connection.getTokenAccountBalance(accounts.takerTokenAccountA);
-    const bobTokenAccountBalanceAfter = new BN(bobTokenAccountBalanceAfterResponse.value.amount);
+    const bobTokenAccountBalanceAfterResponse = await provider.connection.getTokenAccountBalance(
+      accounts.takerTokenAccountA,
+    );
+    const bobTokenAccountBalanceAfter = new anchor.BN(bobTokenAccountBalanceAfterResponse.value.amount);
     assert(bobTokenAccountBalanceAfter.eq(tokenAOfferedAmount));
 
     // Check the wanted tokens are now in Alice's account
     // (note: there is no before balance as Alice didn't have any wanted tokens before the transaction)
-    const aliceTokenAccountBalanceAfterResponse = await connection.getTokenAccountBalance(accounts.makerTokenAccountB);
-    const aliceTokenAccountBalanceAfter = new BN(aliceTokenAccountBalanceAfterResponse.value.amount);
+    const aliceTokenAccountBalanceAfterResponse = await provider.connection.getTokenAccountBalance(
+      accounts.makerTokenAccountB,
+    );
+    const aliceTokenAccountBalanceAfter = new anchor.BN(aliceTokenAccountBalanceAfterResponse.value.amount);
     assert(aliceTokenAccountBalanceAfter.eq(tokenBWantedAmount));
   }).slow(ANCHOR_SLOW_TEST_THRESHOLD);
 });

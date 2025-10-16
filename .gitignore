@@ -7,4 +7,3 @@ test-ledger
 .yarn
 package-lock.json
 pnpm-lock.yaml
-dist

@@ -1,182 +1,113 @@
-import { randomBytes } from "node:crypto";
 import { BN, Program } from "@coral-xyz/anchor";
 import {
-  createAssociatedTokenAccountIdempotentInstruction,
-  createInitializeMint2Instruction,
-  createMintToInstruction,
+  ASSOCIATED_TOKEN_PROGRAM_ID,
   getAccount,
   getAssociatedTokenAddressSync,
-  getMinimumBalanceForRentExemptMint,
-  MINT_SIZE,
   type TOKEN_2022_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
-import { Keypair, LAMPORTS_PER_SOL, PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
+import { type Keypair, LAMPORTS_PER_SOL, PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
 import { fromWorkspace, LiteSVMProvider } from "anchor-litesvm";
 import { assert } from "chai";
 import IDL from "../target/idl/escrow.json";
 import { type Escrow } from "../target/types/escrow";
+import { getRandomBigNumber } from "./utils/random-bn";
+import { createAccountsMintsAndTokenAccountsInstructions } from "./utils/token";
 
 // Work on both Token Program and new Token Extensions Program
 // Use regular TOKEN_PROGRAM_ID for litesvm compatibility
 const TOKEN_PROGRAM: typeof TOKEN_2022_PROGRAM_ID | typeof TOKEN_PROGRAM_ID = TOKEN_PROGRAM_ID;
 
-const getRandomBigNumber = (size = 8) => {
-  return new BN(randomBytes(size));
-};
-
 describe("escrow litesvm", () => {
-  const client = fromWorkspace(".");
-  const provider: LiteSVMProvider = new LiteSVMProvider(client);
-
-  const payer = provider.wallet.payer;
-
-  const program = new Program<Escrow>(IDL, provider);
-
   // We're going to reuse these accounts across multiple tests
   const accounts: Record<string, PublicKey> = {
     tokenProgram: TOKEN_PROGRAM,
   };
 
-  const alice: Keypair = Keypair.generate();
-  const bob: Keypair = Keypair.generate();
-  const tokenMintA: Keypair = Keypair.generate();
-  const tokenMintB: Keypair = Keypair.generate();
+  let provider: LiteSVMProvider;
+  let program: Program<Escrow>;
+
+  let payer: Keypair;
+  let alice: Keypair;
+  let bob: Keypair;
+  let tokenMintA: Keypair;
+  let tokenMintB: Keypair;
 
   const tokenAOfferedAmount = new BN(1 * LAMPORTS_PER_SOL);
   const tokenBWantedAmount = new BN(1 * LAMPORTS_PER_SOL);
 
-  // fund the payer, alice, and bob
-  provider.client.airdrop(payer.publicKey, BigInt(10 * LAMPORTS_PER_SOL));
-  provider.client.airdrop(alice.publicKey, BigInt(10 * LAMPORTS_PER_SOL));
-  provider.client.airdrop(bob.publicKey, BigInt(10 * LAMPORTS_PER_SOL));
+  before(async () => {
+    const client = fromWorkspace(".");
+    provider = new LiteSVMProvider(client);
+    program = new Program<Escrow>(IDL, provider);
 
-  before(
-    "Creates Alice and Bob accounts, 2 token mints, and associated token accounts for both tokens for both users",
-    async () => {
-      // aliceTokenAccountA is Alice's account for tokenA (the token she's offering)
-      const aliceTokenAccountA = getAssociatedTokenAddressSync(
-        tokenMintA.publicKey,
-        alice.publicKey,
-        false,
-        TOKEN_PROGRAM,
-      );
+    payer = provider.wallet.payer;
 
-      // aliceTokenAccountB is Alice's account for tokenB (the token she wants)
-      const aliceTokenAccountB = getAssociatedTokenAddressSync(
-        tokenMintB.publicKey,
-        alice.publicKey,
-        false,
-        TOKEN_PROGRAM,
-      );
+    // fund the payer
+    provider.client.airdrop(payer.publicKey, BigInt(100 * LAMPORTS_PER_SOL));
 
-      // bobTokenAccountA is Bob's account for tokenA (the token Alice is offering)
-      const bobTokenAccountA = getAssociatedTokenAddressSync(tokenMintA.publicKey, bob.publicKey, false, TOKEN_PROGRAM);
+    // Creates Alice and Bob accounts, 2 token mints, and associated token accounts for both tokens for both users
+    const usersMintsAndTokenAccounts = await createAccountsMintsAndTokenAccountsInstructions({
+      connection: provider.connection,
+      decimals: 9,
+      lamports: 10 * LAMPORTS_PER_SOL,
+      payer,
+      tokenProgram: TOKEN_PROGRAM,
+      usersAndTokenBalances: [
+        // Alice's token balances
+        [
+          // 1_000_000_000 of token A
+          1_000_000_000,
+          // 0 of token B
+          0,
+        ],
+        // Bob's token balances
+        [
+          // 0 of token A
+          0,
+          // 1_000_000_000 of token B
+          1_000_000_000,
+        ],
+      ],
+    });
 
-      // bobTokenAccountB is Bob's account for tokenB (the token Alice wants)
-      const bobTokenAccountB = getAssociatedTokenAddressSync(tokenMintB.publicKey, bob.publicKey, false, TOKEN_PROGRAM);
+    const tx = new Transaction().add(...usersMintsAndTokenAccounts.instructions);
+    await provider.sendAndConfirm(tx, usersMintsAndTokenAccounts.signers);
 
-      // setup token mints and ATAs
-      const minimumLamports = await getMinimumBalanceForRentExemptMint(provider.connection);
+    // Alice will be the maker (creator) of the offer
+    // Bob will be the taker (acceptor) of the offer
+    const users = usersMintsAndTokenAccounts.users;
+    alice = users[0];
+    bob = users[1];
 
-      // Create token mint A
-      const createMintA = SystemProgram.createAccount({
-        fromPubkey: payer.publicKey,
-        lamports: minimumLamports,
-        newAccountPubkey: tokenMintA.publicKey,
-        programId: TOKEN_PROGRAM,
-        space: MINT_SIZE,
-      });
+    // tokenMintA represents the token Alice is offering
+    // tokenMintB represents the token Alice wants in return
+    const mints = usersMintsAndTokenAccounts.mints;
+    tokenMintA = mints[0];
+    tokenMintB = mints[1];
 
-      // Initializes a new mint and optionally deposits all the newly minted tokens in an account.
-      const initMintA = createInitializeMint2Instruction(
-        tokenMintA.publicKey,
-        9,
-        alice.publicKey, // mint authority
-        null,
-        TOKEN_PROGRAM,
-      );
+    const tokenAccounts = usersMintsAndTokenAccounts.tokenAccounts;
 
-      // Create the ATA
-      const createAliceTokenAccountA = createAssociatedTokenAccountIdempotentInstruction(
-        payer.publicKey,
-        aliceTokenAccountA,
-        alice.publicKey,
-        tokenMintA.publicKey,
-        TOKEN_PROGRAM,
-      );
+    // aliceTokenAccountA is Alice's account for tokenA (the token she's offering)
+    // aliceTokenAccountB is Alice's account for tokenB (the token she wants)
+    const aliceTokenAccountA = tokenAccounts[0][0];
+    const aliceTokenAccountB = tokenAccounts[0][1];
 
-      // Mint some tokens to the ATA
-      const mintToAliceA = createMintToInstruction(
-        tokenMintA.publicKey,
-        aliceTokenAccountA,
-        alice.publicKey,
-        1000 * LAMPORTS_PER_SOL, // 1000 tokens with 9 decimals
-        [],
-        TOKEN_PROGRAM,
-      );
+    // bobTokenAccountA is Bob's account for tokenA (the token Alice is offering)
+    // bobTokenAccountB is Bob's account for tokenB (the token Alice wants)
+    const bobTokenAccountA = tokenAccounts[1][0];
+    const bobTokenAccountB = tokenAccounts[1][1];
 
-      // Create token mint B
-      const createMintB = SystemProgram.createAccount({
-        fromPubkey: payer.publicKey,
-        lamports: minimumLamports,
-        newAccountPubkey: tokenMintB.publicKey,
-        programId: TOKEN_PROGRAM,
-        space: MINT_SIZE,
-      });
-
-      // Initializes a new mint and optionally deposits all the newly minted tokens in an account.
-      const initMintB = createInitializeMint2Instruction(
-        tokenMintB.publicKey,
-        9,
-        bob.publicKey, // mint authority
-        null,
-        TOKEN_PROGRAM,
-      );
-
-      // Create the ATA
-      const createBobTokenAccountB = createAssociatedTokenAccountIdempotentInstruction(
-        payer.publicKey,
-        bobTokenAccountB,
-        bob.publicKey,
-        tokenMintB.publicKey,
-        TOKEN_PROGRAM,
-      );
-
-      // Mint some tokens to the ATA
-      const mintToBobB = createMintToInstruction(
-        tokenMintB.publicKey,
-        bobTokenAccountB,
-        bob.publicKey,
-        1000 * LAMPORTS_PER_SOL, // 1000 tokens with 9 decimals
-        [],
-        TOKEN_PROGRAM,
-      );
-
-      const tx = new Transaction().add(
-        createMintA,
-        initMintA,
-        createAliceTokenAccountA,
-        mintToAliceA,
-        createMintB,
-        initMintB,
-        createBobTokenAccountB,
-        mintToBobB,
-      );
-
-      await provider.sendAndConfirm(tx, [alice, bob, tokenMintA, tokenMintB, payer]);
-
-      // Save the accounts for later use
-      accounts.maker = alice.publicKey;
-      accounts.taker = bob.publicKey;
-      accounts.tokenMintA = tokenMintA.publicKey;
-      accounts.makerTokenAccountA = aliceTokenAccountA;
-      accounts.takerTokenAccountA = bobTokenAccountA;
-      accounts.tokenMintB = tokenMintB.publicKey;
-      accounts.makerTokenAccountB = aliceTokenAccountB;
-      accounts.takerTokenAccountB = bobTokenAccountB;
-    },
-  );
+    // Save the accounts for later use
+    accounts.maker = alice.publicKey;
+    accounts.taker = bob.publicKey;
+    accounts.tokenMintA = tokenMintA.publicKey;
+    accounts.makerTokenAccountA = aliceTokenAccountA;
+    accounts.takerTokenAccountA = bobTokenAccountA;
+    accounts.tokenMintB = tokenMintB.publicKey;
+    accounts.makerTokenAccountB = aliceTokenAccountB;
+    accounts.takerTokenAccountB = bobTokenAccountB;
+  });
 
   it("Puts the tokens Alice offers into the vault when Alice makes an offer", async () => {
     // Pick a random ID for the offer we'll make
@@ -196,7 +127,17 @@ describe("escrow litesvm", () => {
 
     await program.methods
       .makeOffer(offerId, tokenAOfferedAmount, tokenBWantedAmount)
-      .accounts({ ...accounts })
+      .accountsStrict({
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        maker: accounts.maker,
+        makerTokenAccountA: accounts.makerTokenAccountA,
+        offer: accounts.offer,
+        systemProgram: SystemProgram.programId,
+        tokenMintA: accounts.tokenMintA,
+        tokenMintB: accounts.tokenMintB,
+        tokenProgram: TOKEN_PROGRAM,
+        vault: accounts.vault,
+      })
       .signers([alice])
       .rpc();
 
@@ -217,7 +158,20 @@ describe("escrow litesvm", () => {
   it("Puts the tokens from the vault into Bob's account, and gives Alice Bob's tokens, when Bob takes an offer", async () => {
     await program.methods
       .takeOffer()
-      .accounts({ ...accounts })
+      .accountsStrict({
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        maker: accounts.maker,
+        makerTokenAccountB: accounts.makerTokenAccountB,
+        offer: accounts.offer,
+        systemProgram: SystemProgram.programId,
+        taker: accounts.taker,
+        takerTokenAccountA: accounts.takerTokenAccountA,
+        takerTokenAccountB: accounts.takerTokenAccountB,
+        tokenMintA: accounts.tokenMintA,
+        tokenMintB: accounts.tokenMintB,
+        tokenProgram: TOKEN_PROGRAM,
+        vault: accounts.vault,
+      })
       .signers([bob])
       .rpc();
 
