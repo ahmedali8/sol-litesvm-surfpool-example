@@ -8,7 +8,6 @@ import {
 import { type Keypair, LAMPORTS_PER_SOL, PublicKey, SystemProgram } from "@solana/web3.js";
 import { assert } from "chai";
 import { type Escrow } from "../target/types/escrow";
-import { makeKeypairs } from "./utils/keypair";
 import { getRandomBigNumber } from "./utils/random-bn";
 import { createAccountsMintsAndTokenAccountsInstructions, makeAndSendAndConfirmTransaction } from "./utils/token";
 import { confirmTransaction } from "./utils/transaction";
