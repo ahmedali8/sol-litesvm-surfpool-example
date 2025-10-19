@@ -1,13 +1,14 @@
 use litesvm::LiteSVM;
+use solana_instruction::{AccountMeta, Instruction};
 use solana_keypair::Keypair;
 use solana_kite::{
     create_associated_token_account, create_token_mint, create_wallet, create_wallets, deploy_program,
-    mint_tokens_to_account,
+    get_pda_and_bump, mint_tokens_to_account, send_transaction_from_instructions, SolanaKiteError,
 };
-use solana_program::hash;
-use solana_program::instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
+use solana_sha256_hasher::hash;
 use solana_signer::Signer;
+use spl_associated_token_account::get_associated_token_address;
 use std::cell::Cell;
 
 pub const PROGRAM_ID: &str = "2CFq54VpUBc5updnc5M7EGQcBQsQ6web8TDYN3TR3QCp";
@@ -176,17 +177,12 @@ pub fn generate_offer_id() -> u64 {
 }
 
 // -------------------------------------------------------------------------- //
-// Discriminators
+// Make Offer
 // -------------------------------------------------------------------------- //
 
 pub fn get_make_offer_discriminator() -> Vec<u8> {
     let discriminator_input = b"global:make_offer";
-    hash::hash(discriminator_input).to_bytes()[..8].to_vec()
-}
-
-pub fn get_take_offer_discriminator() -> Vec<u8> {
-    let discriminator_input = b"global:take_offer";
-    hash::hash(discriminator_input).to_bytes()[..8].to_vec()
+    hash(discriminator_input).to_bytes()[..8].to_vec()
 }
 
 pub struct MakeOfferAccounts {
@@ -252,4 +248,146 @@ pub fn build_make_offer_instruction(
     ];
 
     Instruction { program_id: get_program_id(), accounts: account_metas, data: instruction_data }
+}
+
+/// Executes a complete make_offer flow: creates PDAs, builds accounts, and executes instruction
+///
+/// This helper eliminates the repetitive pattern of creating offer_account and vault PDAs,
+/// building MakeOfferAccounts, and executing the make_offer instruction that appears in
+/// multiple tests.
+pub fn execute_make_offer(
+    test_env: &mut EscrowTestEnvironment,
+    offer_id: u64,
+    maker: &Keypair,
+    maker_token_account_a: Pubkey,
+    token_a_offered_amount: u64,
+    token_b_wanted_amount: u64,
+) -> Result<(Pubkey, Pubkey), SolanaKiteError> {
+    // Create PDAs
+    let (offer, _offer_bump) = get_pda_and_bump(
+        &[b"offer".as_ref().into(), maker.pubkey().as_ref().into(), offer_id.to_le_bytes().as_ref().into()],
+        &test_env.program_id,
+    );
+    let vault = get_associated_token_address(&offer, &test_env.token_mint_a);
+
+    // Build accounts
+    let make_offer_accounts = build_make_offer_accounts(
+        maker.pubkey(),
+        test_env.token_mint_a,
+        test_env.token_mint_b,
+        maker_token_account_a,
+        offer,
+        vault,
+    );
+
+    // Build and execute instruction
+    let make_offer_instruction =
+        build_make_offer_instruction(offer_id, token_a_offered_amount, token_b_wanted_amount, make_offer_accounts);
+
+    send_transaction_from_instructions(&mut test_env.litesvm, vec![make_offer_instruction], &[maker], &maker.pubkey())?;
+
+    Ok((offer, vault))
+}
+
+// -------------------------------------------------------------------------- //
+// Take Offer
+// -------------------------------------------------------------------------- //
+
+pub fn get_take_offer_discriminator() -> Vec<u8> {
+    let discriminator_input = b"global:take_offer";
+    hash(discriminator_input).to_bytes()[..8].to_vec()
+}
+
+pub struct TakeOfferAccounts {
+    taker: Pubkey,
+    maker: Pubkey,
+    token_mint_a: Pubkey,
+    token_mint_b: Pubkey,
+    taker_token_account_a: Pubkey,
+    taker_token_account_b: Pubkey,
+    maker_token_account_b: Pubkey,
+    offer: Pubkey,
+    vault: Pubkey,
+    associated_token_program: Pubkey,
+    token_program: Pubkey,
+    system_program: Pubkey,
+}
+
+pub fn build_take_offer_accounts(
+    taker: Pubkey,
+    maker: Pubkey,
+    token_mint_a: Pubkey,
+    token_mint_b: Pubkey,
+    taker_token_account_a: Pubkey,
+    taker_token_account_b: Pubkey,
+    maker_token_account_b: Pubkey,
+    offer: Pubkey,
+    vault: Pubkey,
+) -> TakeOfferAccounts {
+    TakeOfferAccounts {
+        taker,
+        maker,
+        token_mint_a,
+        token_mint_b,
+        taker_token_account_a,
+        taker_token_account_b,
+        maker_token_account_b,
+        offer,
+        vault,
+        associated_token_program: spl_associated_token_account::ID,
+        token_program: spl_token::ID,
+        system_program: anchor_lang::system_program::ID,
+    }
+}
+
+pub fn build_take_offer_instruction(accounts: TakeOfferAccounts) -> Instruction {
+    let instruction_data = get_take_offer_discriminator();
+
+    let account_metas = vec![
+        AccountMeta::new(accounts.taker, true),
+        AccountMeta::new(accounts.maker, false),
+        AccountMeta::new_readonly(accounts.token_mint_a, false),
+        AccountMeta::new_readonly(accounts.token_mint_b, false),
+        AccountMeta::new(accounts.taker_token_account_a, false),
+        AccountMeta::new(accounts.taker_token_account_b, false),
+        AccountMeta::new(accounts.maker_token_account_b, false),
+        AccountMeta::new(accounts.offer, false),
+        AccountMeta::new(accounts.vault, false),
+        AccountMeta::new_readonly(accounts.associated_token_program, false),
+        AccountMeta::new_readonly(accounts.token_program, false),
+        AccountMeta::new_readonly(accounts.system_program, false),
+    ];
+
+    Instruction { program_id: get_program_id(), accounts: account_metas, data: instruction_data }
+}
+
+/// Executes a complete take_offer flow: builds accounts and executes instruction
+pub fn execute_take_offer(
+    test_env: &mut EscrowTestEnvironment,
+    taker: &Keypair,
+    maker: &Keypair,
+    taker_token_account_a: Pubkey,
+    taker_token_account_b: Pubkey,
+    maker_token_account_b: Pubkey,
+    offer: Pubkey,
+    vault: Pubkey,
+) -> Result<(), SolanaKiteError> {
+    let take_offer_accounts = TakeOfferAccounts {
+        taker: taker.pubkey(),
+        maker: maker.pubkey(),
+        token_mint_a: test_env.token_mint_a,
+        token_mint_b: test_env.token_mint_b,
+        taker_token_account_a,
+        taker_token_account_b,
+        maker_token_account_b,
+        offer,
+        vault,
+        associated_token_program: spl_associated_token_account::ID,
+        token_program: spl_token::ID,
+        system_program: anchor_lang::system_program::ID,
+    };
+
+    let take_offer_instruction = build_take_offer_instruction(take_offer_accounts);
+
+    send_transaction_from_instructions(&mut test_env.litesvm, vec![take_offer_instruction], &[taker], &taker.pubkey())
 }

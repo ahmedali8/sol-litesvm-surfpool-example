@@ -9,6 +9,7 @@ pub mod tests;
 use anchor_lang::prelude::*;
 
 pub use constants::*;
+pub use error::EscrowError;
 pub use instructions::*;
 pub use state::*;
 
@@ -24,6 +25,18 @@ pub mod escrow {
         token_a_offered_amount: u64,
         token_b_wanted_amount: u64,
     ) -> Result<()> {
+        // Validate that token mints are different
+        require!(
+            context.accounts.token_mint_a.key() != context.accounts.token_mint_b.key(),
+            EscrowError::SameTokenMints
+        );
+
+        // Validate that offered amount is greater than zero
+        require!(token_a_offered_amount > 0, EscrowError::ZeroOfferedAmount);
+
+        // Validate that wanted amount is greater than zero
+        require!(token_b_wanted_amount > 0, EscrowError::ZeroWantedAmount);
+
         instructions::make_offer::send_offered_tokens_to_vault(&context, token_a_offered_amount)?;
         instructions::make_offer::save_offer(context, id, token_b_wanted_amount)
     }
